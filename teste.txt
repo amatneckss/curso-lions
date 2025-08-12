@@ -1,0 +1,154 @@
+java
+import com.google.cloud.aiplatform.v1.EndpointName;
+import com.google.cloud.aiplatform.v1.PredictResponse;
+import com.google.cloud.aiplatform.v1.PredictionServiceClient;
+import com.google.cloud.aiplatform.v1.PredictionServiceSettings;
+import com.google.protobuf.ListValue;
+import com.google.protobuf.Struct;
+import com.google.protobuf.Value;
+import java.io.IOException;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class IceCreamFlavorGenerator {
+
+  private static final Logger LOGGER = Logger.getLogger(IceCreamFlavorGenerator.class.getName());
+  private static final String PROJECT_ID = "seu-projeto-id"; // Substitua pelo ID do seu projeto
+  private static final String LOCATION = "us-central1"; // Substitua pela sua localização (região)
+  private static final String ENDPOINT_ID =
+      "seu-endpoint-id"; // Substitua pelo ID do endpoint do seu modelo Gemini
+  private static final String ENDPOINT = LOCATION + "-aiplatform.googleapis.com:443";
+  private static final float DEFAULT_TEMPERATURE = 0.8f;
+  private static final int DEFAULT_MAX_OUTPUT_TOKENS = 200;
+  private static final float DEFAULT_TOP_P = 0.8f;
+  private static final int DEFAULT_TOP_K = 40;
+
+  private PredictionServiceClient predictionServiceClient;
+
+  public IceCreamFlavorGenerator() {}
+
+  private PredictionServiceClient getPredictionServiceClient() throws IOException {
+    if (predictionServiceClient == null) {
+      PredictionServiceSettings predictionServiceSettings =
+          PredictionServiceSettings.newBuilder().setEndpoint(ENDPOINT).build();
+      predictionServiceClient = PredictionServiceClient.create(predictionServiceSettings);
+    }
+    return predictionServiceClient;
+  }
+
+  public String generateFlavorIdea(String prompt) throws IOException {
+    return invokeGemini(prompt);
+  }
+
+  public String refineFlavorDescription(String description, String refinementPrompt)
+      throws IOException {
+    String fullPrompt =
+        "Refine the following ice cream flavor description:\n\n"
+            + description
+            + "\n\nRefinement Instructions: "
+            + refinementPrompt;
+    return invokeGemini(fullPrompt);
+  }
+
+  public String detailIngredients(String flavor) throws IOException {
+    String fullPrompt =
+        "List the main ingredients for the following ice cream flavor:\n\n"
+            + flavor
+            + "\n\nProvide a detailed list and approximate quantities, if possible.";
+    return invokeGemini(fullPrompt);
+  }
+
+  private String invokeGemini(String prompt) throws IOException {
+    PredictionServiceClient client = getPredictionServiceClient();
+    EndpointName endpointName = EndpointName.of(PROJECT_ID, LOCATION, ENDPOINT_ID);
+
+    Map<String, Value> instanceMap = new HashMap<>();
+    instanceMap.put(
+        "messages",
+        Value.newBuilder()
+            .setListValue(
+                ListValue.newBuilder()
+                    .addValues(Value.newBuilder().setStringValue(prompt).build())
+                    .build())
+            .build());
+
+    Value instanceValue =
+        Value.newBuilder().setStructValue(Struct.newBuilder().putAllFields(instanceMap).build())
+            .build();
+
+    Map<String, Value> parametersMap = new HashMap<>();
+    parametersMap.put(
+        "temperature", Value.newBuilder().setNumberValue(DEFAULT_TEMPERATURE).build());
+    parametersMap.put(
+        "maxOutputTokens", Value.newBuilder().setNumberValue(DEFAULT_MAX_OUTPUT_TOKENS).build());
+    parametersMap.put("topP", Value.newBuilder().setNumberValue(DEFAULT_TOP_P).build());
+    parametersMap.put("topK", Value.newBuilder().setNumberValue(DEFAULT_TOP_K).build());
+
+    Value parameterValue =
+        Value.newBuilder().setStructValue(Struct.newBuilder().putAllFields(parametersMap).build())
+            .build();
+
+    PredictResponse predictResponse =
+        client.predict(
+            endpointName,
+            Collections.singletonList(instanceValue),
+            Collections.singletonList(parameterValue));
+
+    if (predictResponse.getPredictionsCount() > 0) {
+      Value prediction = predictResponse.getPredictions(0);
+      if (prediction.getStructValue().containsFields("content")) {
+        return prediction.getStructValue().getFieldsOrThrow("content").getStringValue();
+      } else {
+        LOGGER.log(Level.WARNING, "The model response did not contain the 'content' field.");
+        return null;
+      }
+    } else {
+      LOGGER.log(Level.WARNING, "No predictions returned.");
+      return null;
+    }
+  }
+
+  public void close() {
+    if (predictionServiceClient != null) {
+      predictionServiceClient.close();
+    }
+  }
+
+  public static void main(String[] args) {
+    IceCreamFlavorGenerator generator = new IceCreamFlavorGenerator();
+    try {
+      // Flavor idea generation
+      String generationPrompt = "Give me an innovative idea for a new gourmet ice cream flavor.";
+      String generatedFlavor = generator.generateFlavorIdea(generationPrompt);
+
+      if (generatedFlavor != null) {
+        System.out.println("Generated Flavor:\n" + generatedFlavor);
+
+        // Flavor description refinement
+        String refinementPrompt =
+            "Make the description more appetizing and detailed, focusing on the flavors and"
+                + " textures.";
+        String refinedDescription =
+            generator.refineFlavorDescription(generatedFlavor, refinementPrompt);
+
+        if (refinedDescription != null) {
+          System.out.println("\nRefined Description:\n" + refinedDescription);
+        }
+
+        // Ingredient detailing
+        String ingredients = generator.detailIngredients(generatedFlavor);
+        if (ingredients != null) {
+          System.out.println("\nIngredients:\n" + ingredients);
+        }
+      }
+
+    } catch (Exception e) {
+      LOGGER.log(Level.SEVERE, "Error during execution: " + e.getMessage(), e);
+    } finally {
+      generator.close();
+    }
+  }
+}
